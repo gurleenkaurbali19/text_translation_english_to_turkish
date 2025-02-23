@@ -3,127 +3,126 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Text Translation</title>
+    <title>English to Turkish Translator</title>
     <style>
         body {
             font-family: Arial, sans-serif;
-            margin: 40px;
-            padding: 20px;
-            background-color: #f4f4f4;
-        }
-        h1 {
             text-align: center;
-            color: #333;
+            margin: 50px;
         }
-        .container {
-            max-width: 800px;
-            margin: auto;
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
-        }
-        textarea {
-            width: 100%;
-            height: 120px;
-            padding: 10px;
-            font-size: 16px;
-            border: 1px solid #ccc;
-            border-radius: 5px;
-            resize: none;
-            margin-bottom: 10px;
-        }
-        input[type="file"] {
-            margin-bottom: 10px;
+        textarea, input {
+            width: 80%;
+            margin-top: 10px;
         }
         button {
-            width: 100%;
-            padding: 12px;
-            font-size: 16px;
+            padding: 10px 20px;
+            font-size: 18px;
+            background-color: #28a745;
             color: white;
-            background-color: #007BFF;
             border: none;
-            border-radius: 5px;
             cursor: pointer;
             margin-top: 10px;
         }
         button:hover {
-            background-color: #0056b3;
+            background-color: #218838;
         }
-        .result-box {
+        .result {
             margin-top: 20px;
-            padding: 15px;
-            background-color: #e9f5ff;
-            border-left: 5px solid #007BFF;
-            border-radius: 5px;
-        }
-        .result-box h2 {
-            color: #007BFF;
-            margin-bottom: 10px;
-        }
-        .score-box {
-            margin-top: 10px;
             padding: 10px;
-            background-color: #fff3cd;
-            border-left: 5px solid #ff9800;
-            border-radius: 5px;
-        }
-        .score-box h2 {
-            color: #ff9800;
-            margin-bottom: 10px;
-        }
-        p {
-            font-size: 16px;
-            color: #333;
-        }
-        .file-upload {
-            margin-top: 10px;
-            background: #fff;
-            padding: 10px;
-            border: 1px solid #ccc;
-            border-radius: 5px;
+            border: 1px solid #ddd;
+            display: none;
         }
     </style>
 </head>
 <body>
+    <h1>English to Turkish Translator</h1>
 
-    <div class="container">
-        <h1>English to Turkish Translator</h1>
+    <h3>Enter Text:</h3>
+    <textarea id="input_text" placeholder="Enter text to translate..."></textarea>
+    <br>
+    <button onclick="translateText()">Translate</button>
 
-        <!-- Text Input Form -->
-        <form method="POST" enctype="multipart/form-data">
-            {% csrf_token %}
-            <label for="input_text"><strong>Enter Text:</strong></label>
-            <textarea name="input_text" placeholder="Type or paste text here...">{{ input_text|default:"" }}</textarea>
-            <button type="submit">Translate</button>
-        </form>
+    <h3>OR Upload a PDF File:</h3>
+    <input type="file" id="file_input" accept=".pdf">
+    <br>
+    <button onclick="uploadFile()">Upload & Translate</button>
 
-        <!-- File Upload Section -->
-        <div class="file-upload">
-            <h3>OR Upload a File</h3>
-            <form method="POST" enctype="multipart/form-data">
-                {% csrf_token %}
-                <input type="file" name="file" accept=".txt,.pdf">
-                <button type="submit">Upload and Translate</button>
-            </form>
-        </div>
+    <!-- ✅ Display translation here -->
+    <div id="output" class="result"></div>
 
-        {% if translated_text %}
-            <div class="result-box">
-                <h2>Translated Text:</h2>
-                <p>{{ translated_text }}</p>
-            </div>
+    <script>
+        function translateText() {
+            var text = document.getElementById("input_text").value;
+            if (!text.trim()) {
+                alert("Please enter text to translate.");
+                return;
+            }
 
-            <div class="score-box">
-                <h2>Evaluation Scores:</h2>
-                <p><strong>Perplexity Score:</strong> {{ perplexity_score }}</p>
-                <p><strong>Readability Score:</strong> {{ readability_score }}</p>
-                <p><strong>Semantic Similarity Score:</strong> {{ semantic_similarity_score }}</p>
-                <p><strong>Rating (Out of 10):</strong> {{ rating_out_of_10 }}</p>
-            </div>
-        {% endif %}
+            fetch('/translate/process/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: 'text=' + encodeURIComponent(text)
+            })
+            .then(response => response.json()) 
+            .then(data => {
+                console.log("Translated Text:", data.translated_text);  // Debugging line
+                displayTranslation(data);
+            })
+            .catch(error => console.error("Translation Error:", error));
+        }
 
-    </div>
+        function uploadFile() {
+            var fileInput = document.getElementById("file_input").files[0];
+            if (!fileInput) {
+                alert("Please select a PDF file to upload.");
+                return;
+            }
 
+            var formData = new FormData();
+            formData.append("file", fileInput);
+
+            fetch('/translate/upload/', {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log("Translated PDF Text:", data.translated_text);  // Debugging line
+                displayTranslation(data);
+            })
+            .catch(error => console.error("File Translation Error:", error));
+        }
+
+        function displayTranslation(data) {
+            if (data.error) {
+                alert(data.error);
+            } else {
+                document.getElementById("output").innerHTML = `
+                    <h3>Translated Text:</h3>
+                    <p>${data.translated_text}</p>
+                `;
+                document.getElementById("output").style.display = "block";  // ✅ Show the translation on the page
+            }
+        }
+
+        function getCookie(name) {
+            let cookieValue = null;
+            if (document.cookie && document.cookie !== '') {
+                document.cookie.split(';').forEach(cookie => {
+                    cookie = cookie.trim();
+                    if (cookie.startsWith(name + '=')) {
+                        cookieValue = decodeURIComponent(cookie.split('=')[1]);
+                    }
+                });
+            }
+            return cookieValue;
+        }
+    </script>
 </body>
 </html>

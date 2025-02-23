@@ -1,87 +1,91 @@
-import os
-import torch
-import pdfplumber
-import textstat
-from django.shortcuts import render
 from django.http import JsonResponse
-from transformers import pipeline, GPT2LMHeadModel, GPT2Tokenizer
-from sentence_transformers import SentenceTransformer, util
-from django.views.decorators.csrf import csrf_exempt
+import pdfplumber
+from transformers import pipeline
+import re
+from django.shortcuts import render
 
-# Load models
+# Load translation model
 translator = pipeline("translation", model="facebook/m2m100_418M")
-perplexity_model = GPT2LMHeadModel.from_pretrained("gpt2")
-perplexity_tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-similarity_model = SentenceTransformer("all-MiniLM-L6-v2")
 
-def calculate_perplexity(text):
-    """Computes Perplexity Score using GPT-2."""
-    encodings = perplexity_tokenizer(text, return_tensors="pt")
-    input_ids = encodings.input_ids
-    with torch.no_grad():
-        outputs = perplexity_model(input_ids, labels=input_ids)
-        loss = outputs.loss
-    return torch.exp(loss).item()
+def clean_text(text):
+    """ Remove extra spaces, new lines, and unnecessary characters. """
+    return re.sub(r'\s+', ' ', text).strip()
 
-def calculate_readability(text):
-    """Computes Readability Score using textstat."""
-    return textstat.flesch_reading_ease(text)
+def split_text(text, max_length=400):
+    """ Split long text into smaller chunks for translation """
+    words = text.split()
+    chunks = []
+    chunk = []
+    char_count = 0
 
-def calculate_semantic_similarity(original, translated):
-    """Computes Semantic Similarity Score using Sentence Transformers."""
-    embeddings = similarity_model.encode([original, translated], convert_to_tensor=True)
-    score = util.pytorch_cos_sim(embeddings[0], embeddings[1])
-    return score.item()
+    for word in words:
+        if char_count + len(word) < max_length:
+            chunk.append(word)
+            char_count += len(word) + 1  # +1 for space
+        else:
+            chunks.append(" ".join(chunk))
+            chunk = [word]
+            char_count = len(word)
+    
+    if chunk:
+        chunks.append(" ".join(chunk))
+    
+    return chunks
 
-def evaluate_translation(source, translated):
-    """Computes evaluation metrics using user's calculation logic."""
-    perplexity_score = calculate_perplexity(translated)
-    readability_score = calculate_readability(translated)
-    semantic_similarity_score = calculate_semantic_similarity(source, translated)
+def translate_text(text):
+    """ Translate text with proper handling for long inputs """
+    text = clean_text(text)
+    
+    if len(text.split()) > 400:  # If too long, split into chunks
+        text_chunks = split_text(text, max_length=400)
+        translated_chunks = [
+            translator(chunk, src_lang="en", tgt_lang="tr", max_length=500)[0]['translation_text']
+            for chunk in text_chunks
+        ]
+        translated_text = " ".join(translated_chunks)
+    else:
+        translated_text = translator(text, src_lang="en", tgt_lang="tr", max_length=500)[0]['translation_text']
+    
+    return translated_text
 
-    # Normalize rating based on similarity
-    rating = min(10, max(0, round(semantic_similarity_score * 10, 1)))  
 
-    return {
-        "perplexity_score": round(perplexity_score, 2),
-        "readability_score": round(readability_score, 2),
-        "semantic_similarity_score": round(semantic_similarity_score, 3),
-        "rating_out_of_10": rating
-    }
-
-def extract_text_from_pdf(pdf_file):
-    """Extracts text from uploaded PDF."""
-    text = ""
-    with pdfplumber.open(pdf_file) as pdf:
-        for page in pdf.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text += page_text + "\n"
-    return text.strip()
-
-@csrf_exempt
-def translate_text(request):
-    """Handles text and PDF translation requests."""
-    if request.method == "POST":
-        input_text = request.POST.get("text", "")
-        uploaded_file = request.FILES.get("file")
-
-        # Handle PDF file input
-        if uploaded_file and uploaded_file.name.endswith(".pdf"):
-            input_text = extract_text_from_pdf(uploaded_file)
-
-        if not input_text.strip():
-            return JsonResponse({"error": "No input text provided."}, status=400)
-
-        # Translate text
-        translated_text = translator(input_text, src_lang="en", tgt_lang="tr")[0]['translation_text']
-
-        # Evaluate translation
-        scores = evaluate_translation(input_text, translated_text)
-
-        return JsonResponse({
-            "translated_text": translated_text,
-            "evaluation_scores": scores
-        })
-
+def translate_page(request):
+    """ Render translation page. """
     return render(request, "translate.html")
+
+def process_translation(request):
+    """ Handle text input translation """
+    if request.method == "POST":
+        text = request.POST.get("text", "").strip()
+        if not text:
+            return JsonResponse({"error": "No text provided!"}, status=400)
+        
+        translated_text = translate_text(text)
+        return JsonResponse({"translated_text": translated_text})
+
+def upload_file(request):
+    """ Handle PDF file uploads and extract text for translation """
+    if request.method == "POST" and request.FILES.get("file"):
+        uploaded_file = request.FILES["file"]
+        file_ext = uploaded_file.name.split('.')[-1].lower()
+
+        if file_ext not in ["pdf", "txt"]:
+            return JsonResponse({"error": "Only PDF and TXT files are supported!"}, status=400)
+        
+        extracted_text = ""
+
+        if file_ext == "pdf":
+            with pdfplumber.open(uploaded_file) as pdf:
+                extracted_text = " ".join([page.extract_text() for page in pdf.pages if page.extract_text()])
+        elif file_ext == "txt":
+            extracted_text = uploaded_file.read().decode("utf-8")
+
+        extracted_text = clean_text(extracted_text)
+
+        if not extracted_text:
+            return JsonResponse({"error": "No readable text found in the document!"}, status=400)
+
+        translated_text = translate_text(extracted_text)
+        return JsonResponse({"translated_text": translated_text})
+
+    return JsonResponse({"error": "Invalid request!"}, status=400)
